@@ -312,7 +312,7 @@ fn build_clickhouse_large_state(lg_k: u8, registers: &[u8]) -> Result<Vec<u8>, S
     }
 
     let max_rank: u8 = 64 - lg_k + 1;
-    let zeros = registers.iter().filter(|&&r| r == 0).count() as u32;
+    let zeros = registers.iter().filter(|&&r| r == 0).count();
     let rank_count_len = max_rank as usize + 1;
 
     let mut rank_store = vec![0u8; (bucket_count * 6 + 7) / 8];
@@ -331,13 +331,24 @@ fn build_clickhouse_large_state(lg_k: u8, registers: &[u8]) -> Result<Vec<u8>, S
             .ok_or_else(|| "rank-count overflow".to_string())?;
     }
 
-    let mut out = Vec::with_capacity(1 + rank_store.len() + rank_counts.len() * 4 + 4);
+    let zero_bytes = if bucket_count <= u16::MAX as usize { 2 } else { 4 };
+    let mut out = Vec::with_capacity(1 + rank_store.len() + rank_counts.len() * 4 + zero_bytes);
     out.push(CONTAINER_TYPE_LARGE);
     out.extend_from_slice(&rank_store);
     for count in rank_counts {
         out.extend_from_slice(&count.to_le_bytes());
     }
-    out.extend_from_slice(&zeros.to_le_bytes());
+    if bucket_count <= u16::MAX as usize {
+        let zeros: u16 = zeros
+            .try_into()
+            .map_err(|_| "zero-count overflow for UInt16 ClickHouse state".to_string())?;
+        out.extend_from_slice(&zeros.to_le_bytes());
+    } else {
+        let zeros: u32 = zeros
+            .try_into()
+            .map_err(|_| "zero-count overflow for UInt32 ClickHouse state".to_string())?;
+        out.extend_from_slice(&zeros.to_le_bytes());
+    }
     Ok(out)
 }
 
@@ -484,5 +495,17 @@ mod tests {
         let encoded = rmp_serde::to_vec(&"hello").unwrap();
         let decoded: BinaryString = rmp_serde::from_slice(&encoded).unwrap();
         assert_eq!(decoded, BinaryString(b"hello".to_vec()));
+    }
+
+    #[test]
+    fn clickhouse_large_state_uses_u16_zero_counter_for_small_precisions() {
+        let out = build_clickhouse_large_state(12, &vec![0u8; 1 << 12]).unwrap();
+        assert_eq!(out.len(), 3291);
+    }
+
+    #[test]
+    fn clickhouse_large_state_uses_u32_zero_counter_for_large_precisions() {
+        let out = build_clickhouse_large_state(16, &vec![0u8; 1 << 16]).unwrap();
+        assert_eq!(out.len(), 49357);
     }
 }
