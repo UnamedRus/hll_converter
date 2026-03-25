@@ -3,3 +3,7 @@ empty_lgk12_hll8.bin	EMPTY	0	0
 list_lgk12_hll8.bin	LIST	1	0
 set_lgk12_hll8.bin	SET	8	2
 hll_lgk12_hll8.bin	HLL	385	8
+hll_lgk12_hll8_n1000.bin	HLL	1000	32
+hll_lgk12_hll8_n10000.bin	HLL	10000	320
+hll_lgk12_hll8_n100000.bin	HLL	100000	3200
+hll_lgk12_hll8_n1000000.bin	HLL	1000000	32000

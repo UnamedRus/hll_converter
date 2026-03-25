@@ -61,6 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tolerance_abs: 8,
             }
         },
+        fixed_count_fixture("hll_lgk12_hll8_n1000.bin", 12, HllType::Hll8, 1_000, 32),
+        fixed_count_fixture("hll_lgk12_hll8_n10000.bin", 12, HllType::Hll8, 10_000, 320),
+        fixed_count_fixture("hll_lgk12_hll8_n100000.bin", 12, HllType::Hll8, 100_000, 3_200),
+        fixed_count_fixture("hll_lgk12_hll8_n1000000.bin", 12, HllType::Hll8, 1_000_000, 32_000),
     ];
 
     let mut manifest =
@@ -130,6 +134,30 @@ fn build_sketch_for_mode(lg_k: u8, hll_type: HllType, target_mode: u8) -> (HllSk
     }
 
     unreachable!("monotonic mode promotion should eventually reach target mode");
+}
+
+fn fixed_count_fixture(
+    file_name: &'static str,
+    lg_k: u8,
+    hll_type: HllType,
+    inserted_count: u64,
+    tolerance_abs: u64,
+) -> FixtureSpec {
+    FixtureSpec {
+        file_name,
+        mode_name: "HLL",
+        sketch: build_sketch_with_count(lg_k, hll_type, inserted_count),
+        inserted_count,
+        tolerance_abs,
+    }
+}
+
+fn build_sketch_with_count(lg_k: u8, hll_type: HllType, inserted_count: u64) -> HllSketch {
+    let mut sketch = HllSketch::new(lg_k, hll_type);
+    for value in 0..inserted_count {
+        sketch.update(value);
+    }
+    sketch
 }
 
 fn current_mode(bytes: &[u8]) -> Option<u8> {
