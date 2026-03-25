@@ -1,0 +1,5 @@
+file_name	mode	inserted_count	tolerance_abs
+empty_lgk12_hll8.bin	EMPTY	0	0
+list_lgk12_hll8.bin	LIST	1	0
+set_lgk12_hll8.bin	SET	8	2
+hll_lgk12_hll8.bin	HLL	385	8

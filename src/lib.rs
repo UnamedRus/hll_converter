@@ -305,6 +305,19 @@ fn set_6bit(buf: &mut [u8], index: usize, value: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datasketches::hll::{HllSketch, HllType};
+
+    fn build_real_sketch_for_mode(target_mode: u8) -> Vec<u8> {
+        let mut sketch = HllSketch::new(12, HllType::Hll8);
+        for value in 0u64.. {
+            sketch.update(value);
+            let bytes = sketch.serialize();
+            if (bytes[MODE_BYTE] & CUR_MODE_MASK) == target_mode {
+                return bytes;
+            }
+        }
+        unreachable!("monotonic mode promotion should eventually reach target mode");
+    }
 
     #[test]
     fn list_coupon_updates_target_slot() {
@@ -313,7 +326,7 @@ mod tests {
         let value = 9u32;
         let pair = (value << 26) | slot;
 
-        let mut apache = vec![0u8; 12];
+        let mut apache = vec![0u8; 8];
         apache[0] = LIST_PREINTS;
         apache[1] = SER_VER;
         apache[2] = FAMILY_ID_HLL;
@@ -357,6 +370,34 @@ mod tests {
         apache[7] = CUR_MODE_HLL | TGT_HLL_8;
         apache[HLL_BYTE_ARR_START + 5] = 11;
 
+        let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
+        assert_eq!(out[0], CONTAINER_TYPE_LARGE);
+    }
+
+    #[test]
+    fn datasketches_rust_empty_fixture_is_accepted() {
+        let apache = HllSketch::new(12, HllType::Hll8).serialize();
+        let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
+        assert_eq!(out[0], CONTAINER_TYPE_LARGE);
+    }
+
+    #[test]
+    fn datasketches_rust_list_fixture_is_accepted() {
+        let apache = build_real_sketch_for_mode(CUR_MODE_LIST);
+        let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
+        assert_eq!(out[0], CONTAINER_TYPE_LARGE);
+    }
+
+    #[test]
+    fn datasketches_rust_set_fixture_is_accepted() {
+        let apache = build_real_sketch_for_mode(CUR_MODE_SET);
+        let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
+        assert_eq!(out[0], CONTAINER_TYPE_LARGE);
+    }
+
+    #[test]
+    fn datasketches_rust_hll_fixture_is_accepted() {
+        let apache = build_real_sketch_for_mode(CUR_MODE_HLL);
         let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
         assert_eq!(out[0], CONTAINER_TYPE_LARGE);
     }
