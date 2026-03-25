@@ -9,3 +9,5 @@ crate-type = ["cdylib"]
 [dependencies]
 clickhouse-wasm-udf = "0.2.0"
 datasketches = "0.2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"

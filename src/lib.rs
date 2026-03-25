@@ -1,4 +1,7 @@
 use clickhouse_wasm_udf::clickhouse_udf;
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 const SER_VER: u8 = 1;
 const FAMILY_ID_HLL: u8 = 7;
@@ -41,9 +44,74 @@ const VAL_SHIFT: u32 = 26;
 /// The binary payload shape is compatible with ClickHouse LARGE container state,
 /// but semantic merge compatibility with native ClickHouse states still requires
 /// the original hash domain to match ClickHouse's `uniqCombined64` hashing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BinaryString(Vec<u8>);
+
+impl BinaryString {
+    fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl Serialize for BinaryString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for BinaryString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BinaryStringVisitor;
+
+        impl<'de> Visitor<'de> for BinaryStringVisitor {
+            type Value = BinaryString;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("raw bytes or a UTF-8 string")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(BinaryString(value.to_vec()))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(BinaryString(value))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(BinaryString(value.as_bytes().to_vec()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(BinaryString(value.into_bytes()))
+            }
+        }
+
+        deserializer.deserialize_any(BinaryStringVisitor)
+    }
+}
+
 #[clickhouse_udf]
-fn apache_hll_to_uniqcombined64_state(sketch: Vec<u8>) -> Result<Vec<u8>, String> {
-    convert_apache_hll_to_clickhouse_uniqcombined64(&sketch)
+fn apache_hll_to_uniqcombined64_state(sketch: BinaryString) -> Result<BinaryString, String> {
+    convert_apache_hll_to_clickhouse_uniqcombined64(&sketch.into_vec()).map(BinaryString)
 }
 
 fn convert_apache_hll_to_clickhouse_uniqcombined64(sketch: &[u8]) -> Result<Vec<u8>, String> {
@@ -305,6 +373,7 @@ fn set_6bit(buf: &mut [u8], index: usize, value: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clickhouse_wasm_udf::rmp_serde;
     use datasketches::hll::{HllSketch, HllType};
 
     fn build_real_sketch_for_mode(target_mode: u8) -> Vec<u8> {
@@ -400,5 +469,20 @@ mod tests {
         let apache = build_real_sketch_for_mode(CUR_MODE_HLL);
         let out = convert_apache_hll_to_clickhouse_uniqcombined64(&apache).unwrap();
         assert_eq!(out[0], CONTAINER_TYPE_LARGE);
+    }
+
+    #[test]
+    fn binary_string_round_trips_as_messagepack_bytes() {
+        let original = BinaryString(vec![0, 159, 255, 10]);
+        let encoded = rmp_serde::to_vec(&original).unwrap();
+        let decoded: BinaryString = rmp_serde::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn binary_string_accepts_messagepack_string_payloads() {
+        let encoded = rmp_serde::to_vec(&"hello").unwrap();
+        let decoded: BinaryString = rmp_serde::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, BinaryString(b"hello".to_vec()));
     }
 }
