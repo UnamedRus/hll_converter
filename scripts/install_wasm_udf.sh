@@ -4,10 +4,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM_PATH="${WASM_PATH:-$ROOT_DIR/target/wasm32-unknown-unknown/release/hll_converter.wasm}"
+FUNCTION_NAME="${FUNCTION_NAME:-apache_hll_to_uniqcombined64_state}"
 MODULE_NAME="${MODULE_NAME:-hll_converter}"
 EXPORT_NAME="${EXPORT_NAME:-apache_hll_to_uniqcombined64_state}"
 BUILD_WASM="${BUILD_WASM:-1}"
 REPLACE_MODULE="${REPLACE_MODULE:-1}"
+CREATE_FUNCTION="${CREATE_FUNCTION:-1}"
+ARGUMENTS_CLAUSE="${ARGUMENTS_CLAUSE:-(sketch String)}"
+RETURNS_CLAUSE="${RETURNS_CLAUSE:-String}"
+ABI_NAME="${ABI_NAME:-BUFFERED_V1}"
 
 CH_CLIENT_BIN="${CH_CLIENT_BIN:-clickhouse-client}"
 CH_HOST="${CH_HOST:-localhost}"
@@ -16,8 +21,8 @@ CH_USER="${CH_USER:-default}"
 CH_PASSWORD="${CH_PASSWORD:-}"
 CH_DATABASE="${CH_DATABASE:-default}"
 
-if [[ "$MODULE_NAME" == *"'"* ]] || [[ "$EXPORT_NAME" == *"'"* ]]; then
-  echo "single quotes are not supported in MODULE_NAME or EXPORT_NAME" >&2
+if [[ "$FUNCTION_NAME" == *"'"* ]] || [[ "$MODULE_NAME" == *"'"* ]] || [[ "$EXPORT_NAME" == *"'"* ]]; then
+  echo "single quotes are not supported in FUNCTION_NAME, MODULE_NAME, or EXPORT_NAME" >&2
   exit 1
 fi
 
@@ -81,22 +86,27 @@ echo "Uploading $WASM_PATH into system.webassembly_modules as '$MODULE_NAME'"
 module_hash="$(run_ch_query "SELECT hash FROM system.webassembly_modules WHERE name = '$MODULE_NAME'")"
 echo "Uploaded module hash: $module_hash"
 
-function_count="$(run_ch_query "SELECT count() FROM system.functions WHERE name = '$EXPORT_NAME'")"
-if [[ "$function_count" == "1" ]]; then
-  echo "WebAssembly UDF is available as '$EXPORT_NAME'"
-  exit 0
+if [[ "$CREATE_FUNCTION" == "1" ]]; then
+  create_query="CREATE OR REPLACE FUNCTION ${FUNCTION_NAME} LANGUAGE WASM ARGUMENTS ${ARGUMENTS_CLAUSE} RETURNS ${RETURNS_CLAUSE} FROM '${MODULE_NAME}' :: '${EXPORT_NAME}' ABI ${ABI_NAME}"
+  echo "Creating or replacing function '$FUNCTION_NAME'"
+  if ! create_output="$(run_ch_query "$create_query" 2>&1)"; then
+    server_version="$(run_ch_query "SELECT version()")"
+    cat >&2 <<EOF
+Failed to register the WebAssembly UDF with:
+  $create_query
+
+ClickHouse server version: $server_version
+Error:
+$create_output
+EOF
+    exit 1
+  fi
 fi
 
-server_version="$(run_ch_query "SELECT version()")"
-cat >&2 <<EOF
-Module upload succeeded, but '$EXPORT_NAME' is not visible in system.functions yet.
+function_count="$(run_ch_query "SELECT count() FROM system.functions WHERE name = '$FUNCTION_NAME'")"
+if [[ "$function_count" != "1" ]]; then
+  echo "module upload succeeded, but function '$FUNCTION_NAME' is still not visible in system.functions" >&2
+  exit 1
+fi
 
-On this server ($server_version), the module storage path is confirmed:
-  INSERT INTO system.webassembly_modules (name, code) VALUES ('${MODULE_NAME}', unhex('<hex wasm>'))
-
-However, this build does not auto-register the exported function after upload, and the
-local parser rejects CREATE FUNCTION statements entirely. If your production ClickHouse
-build supports WebAssembly UDF registration separately, use the uploaded module
-'$MODULE_NAME' as the source module and bind the exported symbol '$EXPORT_NAME' there.
-EOF
-exit 1
+echo "WebAssembly UDF is available as '$FUNCTION_NAME'"
